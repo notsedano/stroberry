@@ -26,9 +26,17 @@ const LivingNebulaShader = ({ colors }: { colors?: NebulaColors }) => {
     const container = containerRef.current;
     if (!container) return;
 
-    // 1) Renderer, Scene, Camera, Clock
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-    renderer.setPixelRatio(window.devicePixelRatio);
+    // 1) Renderer, Scene, Camera, Clock - optimized settings
+    const renderer = new THREE.WebGLRenderer({ 
+      antialias: true, 
+      alpha: true,
+      powerPreference: "high-performance",
+      stencil: false,
+      depth: false,
+    });
+    // Limit pixel ratio for better performance on high-DPI displays
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(container.clientWidth, container.clientHeight);
     container.appendChild(renderer.domElement);
 
     const scene = new THREE.Scene();
@@ -126,29 +134,48 @@ const LivingNebulaShader = ({ colors }: { colors?: NebulaColors }) => {
     const mesh     = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), material);
     scene.add(mesh);
 
-    // 4) Resize Handler
+    // 4) Resize Handler - debounced for performance
+    let resizeTimeout: ReturnType<typeof setTimeout> | undefined;
     const onResize = () => {
-      const width  = container.clientWidth;
-      const height = container.clientHeight;
-      renderer.setSize(width, height);
-      uniforms.iResolution.value.set(width, height);
+      if (resizeTimeout) clearTimeout(resizeTimeout);
+      resizeTimeout = setTimeout(() => {
+        const width  = container.clientWidth;
+        const height = container.clientHeight;
+        renderer.setSize(width, height);
+        uniforms.iResolution.value.set(width, height);
+      }, 150);
     };
-    window.addEventListener('resize', onResize);
+    window.addEventListener('resize', onResize, { passive: true });
     onResize();
 
-    // 5) Mouse Handler
+    // 5) Mouse Handler - throttled for performance
+    let mouseUpdatePending = false;
     const onMouseMove = (e: MouseEvent) => {
-      const x = e.clientX;
-      const y = container.clientHeight - e.clientY;
-      uniforms.iMouse.value.set(x, y);
-      setMousePos({ x: e.clientX, y: e.clientY });
+      if (!mouseUpdatePending) {
+        mouseUpdatePending = true;
+        requestAnimationFrame(() => {
+          const x = e.clientX;
+          const y = container.clientHeight - e.clientY;
+          uniforms.iMouse.value.set(x, y);
+          setMousePos({ x: e.clientX, y: e.clientY });
+          mouseUpdatePending = false;
+        });
+      }
     };
-    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mousemove', onMouseMove, { passive: true });
 
-    // 6) Animation Loop
-    renderer.setAnimationLoop(() => {
-      uniforms.iTime.value = clock.getElapsedTime();
-      renderer.render(scene, camera);
+    // 6) Animation Loop - optimized with frame limiting
+    let lastFrameTime = 0;
+    const targetFPS = 60;
+    const frameInterval = 1000 / targetFPS;
+    
+    renderer.setAnimationLoop((time) => {
+      const elapsed = time - lastFrameTime;
+      if (elapsed >= frameInterval) {
+        uniforms.iTime.value = clock.getElapsedTime();
+        renderer.render(scene, camera);
+        lastFrameTime = time - (elapsed % frameInterval);
+      }
     });
 
     // Update colors when they change
@@ -158,6 +185,7 @@ const LivingNebulaShader = ({ colors }: { colors?: NebulaColors }) => {
 
     // 7) Cleanup
     return () => {
+      if (resizeTimeout) clearTimeout(resizeTimeout);
       window.removeEventListener('resize', onResize);
       window.removeEventListener('mousemove', onMouseMove);
       renderer.setAnimationLoop(null);
